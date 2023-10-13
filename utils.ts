@@ -1,7 +1,6 @@
 import path from "path";
 import fs from "fs";
 import { fileURLToPath } from "url";
-import { execaCommand } from "execa";
 import {
   EnvironmentData,
   Overrides,
@@ -16,6 +15,8 @@ import actionsCore from "@actions/core";
 // eslint-disable-next-line n/no-unpublished-import
 import * as semver from "semver";
 
+import { async as ezspawn } from "@jsdevtools/ez-spawn";
+
 const isGitHubActions = !!process.env.GITHUB_ACTIONS;
 
 let swcPath: string;
@@ -26,34 +27,26 @@ function cd(dir: string) {
   cwd = path.resolve(cwd, dir);
 }
 
-export async function $(literals: TemplateStringsArray, ...values: any[]) {
-  const cmd = literals.reduce(
-    (result, current, i) =>
-      result + current + (values?.[i] != null ? `${values[i]}` : ""),
-    "",
-  );
-
+export async function $(command: string) {
   if (isGitHubActions) {
-    actionsCore.startGroup(`${cwd} $> ${cmd}`);
+    actionsCore.startGroup(`${cwd} $> ${command}`);
   } else {
-    console.log(`${cwd} $> ${cmd}`);
+    console.log(`${cwd} $> ${command}`);
   }
 
-  const proc = execaCommand(cmd, {
-    env,
-    stdio: "pipe",
+  const proc = await ezspawn(command, {
     cwd,
+    env,
   });
-  proc.stdin && process.stdin.pipe(proc.stdin);
-  proc.stdout && proc.stdout.pipe(process.stdout);
-  proc.stderr && proc.stderr.pipe(process.stderr);
-  const result = await proc;
+
+  process.stderr.write(proc.stderr);
+  process.stdout.write(proc.stdout);
 
   if (isGitHubActions) {
     actionsCore.endGroup();
   }
 
-  return result.stdout;
+  return proc.stdout;
 }
 
 // @ts-expect-error import.meta
@@ -112,7 +105,7 @@ export async function setupRepo(options: RepoOptions) {
     cd(dir);
     let currentClonedRepo: string | undefined;
     try {
-      currentClonedRepo = await $`git ls-remote --get-url`;
+      currentClonedRepo = await $(`git ls-remote --get-url`);
     } catch {
       // when not a git repo
     }
@@ -126,24 +119,30 @@ export async function setupRepo(options: RepoOptions) {
   }
 
   if (needClone) {
-    await $`git -c advice.detachedHead=false clone ${
-      shallow ? "--depth=1 --no-tags" : ""
-    } --branch ${tag || branch} ${repo} ${dir}`;
+    await $(
+      `git -c advice.detachedHead=false clone ${
+        shallow ? "--depth=1 --no-tags" : ""
+      } --branch ${tag || branch} ${repo} ${dir}`,
+    );
   }
   cd(dir);
-  await $`git clean -fdxq`;
-  await $`git fetch ${shallow ? "--depth=1 --no-tags" : "--tags"} origin ${
-    tag ? `tag ${tag}` : `${commit || branch}`
-  }`;
+  await $(`git clean -fdxq`);
+  await $(
+    `git fetch ${shallow ? "--depth=1 --no-tags" : "--tags"} origin ${
+      tag ? `tag ${tag}` : `${commit || branch}`
+    }`,
+  );
   if (shallow) {
-    await $`git -c advice.detachedHead=false checkout ${
-      tag ? `tags/${tag}` : `${commit || branch}`
-    }`;
+    await $(
+      `git -c advice.detachedHead=false checkout ${
+        tag ? `tags/${tag}` : `${commit || branch}`
+      }`,
+    );
   } else {
-    await $`git checkout ${branch}`;
-    await $`git merge FETCH_HEAD`;
+    await $(`git checkout ${branch}`);
+    await $(`git merge FETCH_HEAD`);
     if (tag || commit) {
-      await $`git reset --hard ${tag || commit}`;
+      await $(`git reset --hard ${tag || commit}`);
     }
   }
 }
@@ -160,9 +159,9 @@ function toCommand(
       } else if (typeof task === "string") {
         if (scripts[task] != null) {
           const runTaskWithAgent = getCommand(agent, "run", [task]);
-          await $`${runTaskWithAgent}`;
+          await $(runTaskWithAgent);
         } else {
-          await $`${task}`;
+          await $(task);
         }
       } else if (typeof task === "function") {
         await task();
@@ -172,7 +171,7 @@ function toCommand(
             task.script,
             ...(task.args ?? []),
           ]);
-          await $`${runTaskWithAgent}`;
+          await $(runTaskWithAgent);
         } else {
           throw new Error(
             `invalid task, script "${task.script}" does not exist in package.json`,
@@ -250,7 +249,7 @@ export async function runInRepo(options: RunOptions & RepoOptions) {
 
   if (verify && test) {
     const frozenInstall = getCommand(agent, "frozen");
-    await $`${frozenInstall}`;
+    await $(frozenInstall);
     await beforeBuildCommand?.(pkg.scripts);
     await buildCommand?.(pkg.scripts);
     await beforeTestCommand?.(pkg.scripts);
@@ -273,7 +272,7 @@ export async function runInRepo(options: RunOptions & RepoOptions) {
 export async function getPermanentRef() {
   cd(swcPath);
   try {
-    const ref = await $`git log -1 --pretty=format:%h`;
+    const ref = await $(`git log -1 --pretty=format:%h`);
     return ref;
   } catch (e) {
     console.warn(`Failed to obtain perm ref. ${e}`);
@@ -286,26 +285,26 @@ export async function bisectSwc(
 ) {
   // sometimes vite build modifies files in git, e.g. LICENSE.md
   // this would stop bisect, so to reset those changes
-  const resetChanges = async () => $`git reset --hard HEAD`;
+  const resetChanges = async () => $(`git reset --hard HEAD`);
 
   try {
     cd(swcPath);
     await resetChanges();
-    await $`git bisect start`;
-    await $`git bisect bad`;
-    await $`git bisect good ${good}`;
+    await $(`git bisect start`);
+    await $(`git bisect bad`);
+    await $(`git bisect good ${good}`);
     let bisecting = true;
     while (bisecting) {
-      const commitMsg = await $`git log -1 --format=%s`;
+      const commitMsg = await $(`git log -1 --format=%s`);
       const isNonCodeCommit = commitMsg.match(/^(?:release|docs)[:(]/);
       if (isNonCodeCommit) {
-        await $`git bisect skip`;
+        await $(`git bisect skip)`);
         continue; // see if next commit can be skipped too
       }
       const error = await runSuite();
       cd(swcPath);
       await resetChanges();
-      const bisectOut = await $`git bisect ${error ? "bad" : "good"}`;
+      const bisectOut = await $(`git bisect ${error ? "bad" : "good"}`);
       bisecting = bisectOut.substring(0, 10).toLowerCase() === "bisecting:"; // as long as git prints 'bisecting: ' there are more revisions to test
     }
   } catch (e) {
@@ -313,7 +312,7 @@ export async function bisectSwc(
   } finally {
     try {
       cd(swcPath);
-      await $`git bisect reset`;
+      await $(`git bisect reset`);
     } catch (e) {
       console.log("Error while resetting bisect", e);
     }
@@ -348,7 +347,7 @@ async function overridePackageManagerVersion(
 ): Promise<boolean> {
   const versionInUse = pkg.packageManager?.startsWith(`${pm}@`)
     ? pkg.packageManager.substring(pm.length + 1)
-    : await $`${pm} --version`;
+    : await $(`${pm} --version`);
   let overrideWithVersion: string | null = null;
   if (pm === "pnpm") {
     if (semver.eq(versionInUse, "7.18.0")) {
@@ -392,7 +391,7 @@ export async function applyPackageOverrides(
       .filter(([, value]) => typeof value === "string")
       .map(([key, value]) => [key, useFileProtocol(value as string)]),
   );
-  await $`git clean -fdxq`; // remove current install
+  await $(`git clean -fdxq`); // remove current install
 
   const agent = await detect({ cwd: dir, autoInstall: false });
   if (!agent) {
@@ -447,13 +446,15 @@ export async function applyPackageOverrides(
 
   // use of `ni` command here could cause lockfile violation errors so fall back to native commands that avoid these
   if (pm === "pnpm") {
-    await $`pnpm install --prefer-frozen-lockfile --prefer-offline --strict-peer-dependencies false`;
+    await $(
+      `pnpm install --prefer-frozen-lockfile --prefer-offline --strict-peer-dependencies false`,
+    );
   } else if (pm === "yarn") {
-    await $`yarn install`;
+    await $(`yarn install`);
   } else if (pm === "npm") {
     // The transitive dependencies of the linked dependencies will not be installed by `npm i` unless `--install-links` is specified.
     // See https://github.com/npm/cli/issues/2339#issuecomment-1111228605
-    await $`npm install --install-links`;
+    await $(`npm install --install-links`);
   }
 }
 
@@ -465,5 +466,5 @@ export async function installSwc({ version }: { version: string }) {
   await fs.promises.mkdir(swcPath, { recursive: true });
   await fs.promises.writeFile(path.join(swcPath, "package.json"), "{}", "utf8");
   cd(swcPath);
-  await $`npm install @swc/core@${version} @swc/types --no-save`;
+  await $(`npm install @swc/core@${version} @swc/types --no-save`);
 }

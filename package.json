@@ -49,8 +49,8 @@
   "dependencies": {
     "@actions/core": "^1.10.1",
     "@antfu/ni": "^0.21.8",
+    "@jsdevtools/ez-spawn": "^3.0.4",
     "cac": "^6.7.14",
-    "execa": "^8.0.1",
     "semver": "^7.5.4"
   }
 }
