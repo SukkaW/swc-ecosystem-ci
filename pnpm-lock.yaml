@@ -25,6 +25,9 @@ devDependencies:
   "@types/node":
     specifier: ^20.8.3
     version: 20.8.3
+  "@types/semver":
+    specifier: ^7.5.3
+    version: 7.5.3
   "@typescript-eslint/eslint-plugin":
     specifier: ^6.7.4
     version: 6.7.4(@typescript-eslint/parser@6.7.4)(eslint@8.51.0)(typescript@5.2.2)
